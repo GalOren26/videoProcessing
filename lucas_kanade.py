@@ -1,13 +1,12 @@
 import cv2
 import numpy as np
-# from tqdm import tqdm
 from scipy import signal
 from scipy.interpolate import griddata
-import tqdm as tqdm
+from  tqdm import tqdm
 
 # FILL IN YOUR ID
-ID1 = 123456789
-ID2 = 987654321
+ID1 = 206232506
+ID2 = 206454092
 
 
 PYRAMID_FILTER = 1.0 / 256 * np.array([[1, 4, 6, 4, 1],
@@ -121,8 +120,8 @@ def lucas_kanade_step(I1: np.ndarray,
     u = np.zeros(I1.shape)
     v = np.zeros(I1.shape)
     window_shift=window_size//2
-    for i in range(window_size // 2, I1.shape[0] - window_size // 2):
-        for j in range(window_size // 2, I1.shape[1] - window_size // 2):
+    for i in range(window_shift, I1.shape[0] - window_shift):
+        for j in range(window_shift, I1.shape[1] - window_shift):
             A = np.array([Ix[i - window_shift:i + window_shift + 1, j - window_shift:j + window_shift + 1].flatten(),
                           Iy[i - window_shift:i + window_shift + 1, j - window_shift:j + window_shift + 1].flatten()]).T
             b = -It[i - window_shift:i + window_shift + 1, j - window_shift:j + window_shift + 1].flatten()
@@ -191,16 +190,6 @@ def warp_image(image: np.ndarray, u: np.ndarray, v: np.ndarray) -> np.ndarray:
     image_warp = image_warp.reshape(image.shape)
     image_warp[np.isnan(image_warp)] = image_copy[np.isnan(image_warp)]
     return image_warp
-
-        # grid_x, grid_y = np.mgrid[0:image.shape[0], 0:image.shape[1]]
-    # points = np.array([grid_y.flatten(), grid_x.flatten()]).T
-    # values = image.flatten()
-    # points_to_interpolate = np.array([grid_y.flatten() + v.flatten(), grid_x.flatten() + u.flatten()]).T
-    # image_warp = griddata(points, values, points_to_interpolate, fill_value=np.nan)
-    # image_warp = image_warp.reshape(image.shape)
-    # image_warp[np.isnan(image_warp)] = image_copy[np.isnan(image_warp)]
-    # return image_warp
-
 
 
 def lucas_kanade_optical_flow(I1: np.ndarray,
@@ -340,7 +329,7 @@ def lucas_kanade_video_stabilization(input_video_path: str,
     cap = cv2.VideoCapture(input_video_path)
     # Create an output video VideoCapture object with the same parameters as in (1) in the path given here as input.
     videoParm=get_video_parameters(cap)
-    output = cv2.VideoWriter( output_video_path, videoParm["fourcc"], videoParm["fps"], videoParm["out_size"])
+    output = cv2.VideoWriter( output_video_path, videoParm["fourcc"], videoParm["fps"], (videoParm["width"], videoParm["height"]))
     # Convert the first frame to grayscale and write it as-is to the output video.
     ret, frame = cap.read()
     I1 = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -349,7 +338,7 @@ def lucas_kanade_video_stabilization(input_video_path: str,
     U  = np.zeros(I1.shape)
     V  = np.zeros(I1.shape)
     # Loop over the frames in the input video
-    for _ in tqdm(range(int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) - 1)):
+    for i in tqdm(range(int(videoParm['frame_count'] ) - 1)):
                 # Resize them to the shape in (4).
         ret, frame = cap.read()
         if ret==True:
@@ -364,28 +353,19 @@ def lucas_kanade_video_stabilization(input_video_path: str,
             
             # u=np.zeros(u.shape)
             # v=np.zeros(v.shape)
-            u[window_shift:-window_shift, window_shift:-window_shift] = u_mean
-            v[window_shift:-window_shift, window_shift:-window_shift] = v_mean
-            # Add the u and v shift from the previous frame diff such that frame in the t is normalized all the way back to the first frame.
-            U = U + u
-            V = V + v
+            U += u_mean # brodcasting
+            V += v_mean
 
             # Finally, warp the current frame with the u and v you have at hand.
-            I2_warp = warp_image(I2, u, v)
+            I2_warp = warp_image(I2, U, V)
             I2_warp = cv2.cvtColor(I2_warp.astype(np.uint8), cv2.COLOR_GRAY2RGB)
             # write to new video
             output.write(I2_warp)
             # Save the updated u and v for the next frame (so you can perform step 6.5 for the next frame.
             I1 = I2.copy()
-            # We highly recommend you to save each frame to a directory for your own debug purposes.
-
-
-
-
-
-
-
-
+        # free videos
+    cap.release()
+    output.release()
 
 def faster_lucas_kanade_step(I1: np.ndarray,
                              I2: np.ndarray,
@@ -395,7 +375,7 @@ def faster_lucas_kanade_step(I1: np.ndarray,
     (1) If the image is small enough (you need to design what is good
     enough), simply return the result of the good old lucas_kanade_step
     function.
-    (2) Otherwise, find corners in I2 and calculate u and v only for these
+    (2) Otherwise, find corners(with Hairs detector ) in I2 and calculate u and v only for these
     pixels.
     (3) Return maps of u and v which are all zeros except for the corner
     pixels you found in (2).
@@ -414,51 +394,42 @@ def faster_lucas_kanade_step(I1: np.ndarray,
     dv = np.zeros(I1.shape)
     """INSERT YOUR CODE HERE.
     Calculate du and dv correctly.
-    """
+    """ 
 
-    Ix = signal.convolve2d(I2, X_DERIVATIVE_FILTER, boundary='symm', mode='same')
-    Iy = signal.convolve2d(I2, Y_DERIVATIVE_FILTER, boundary='symm', mode='same')
-    
-    It = I2 - I1
-    arr = I2.astype('float32')
-    dst = cv2.cornerHarris(arr, 2, 3, 0.04)
-
-    # Threshold the corner response function to obtain the corner points
-    threshold = 0.005 * dst.max()
-    corner_T = dst > threshold
-    m=0
-
-    # Print the corner indices
-    #print(corner_T.shape,dst.shape,I1.shape)
-    
-
-    for i in range(window_size//2, I1.shape[0] - window_size//2):
-        for j in range(window_size//2, I1.shape[1] - window_size//2):
-            if corner_T[i,j]:
-                m+=1
-                print(m)
-                A = np.zeros((window_size**2, 2))
-                b = np.zeros(window_size**2)
-                #run over the window and fill A and b
-                for k in range(-window_size//2, window_size//2 + 1):
-                    for l in range(- window_size//2, window_size//2 + 1):
-                        A[(k +window_size//2) * window_size + (l + window_size//2), 0] = Ix[k+i, l+j]
-                        A[(k +window_size//2) * window_size + (l + window_size//2), 1] = Iy[k+i, l+j]
-                        b[(k +window_size//2) * window_size + (l +window_size//2)] = -It[k+i, l+j]
-                A = np.matrix(A)
-                b = np.matrix(b)
-                try:
-                    x = np.linalg.inv(A.T * A) * A.T * b.T
-                    du[i, j] = x[0, 0]
-                    dv[i, j] = x[1, 0]
-                except:
-                    pass
-
-    return du, dv
-    
-    
-    
-
+        # case the image is small enough 
+    if I1.shape[0] * I1.shape[1] < 1000:
+        u,v = lucas_kanade_step(I1, I2, window_size)
+        return u,v
+    else:
+        I1 = I1.astype('float32')
+        I2 = I2.astype('float32')
+        It = I2 - I1
+        Ix = signal.convolve2d(I2, X_DERIVATIVE_FILTER, boundary='symm', mode='same')
+        Iy = signal.convolve2d(I2, Y_DERIVATIVE_FILTER, boundary='symm', mode='same')
+        u=np.zeros(I1.shape)
+        v=np.zeros(I1.shape)
+        # find corners(with Haris detector ) in I2
+        
+        corners = cv2.cornerHarris(I2, 3, 3, 0.04)
+        corners = cv2.threshold(corners, 0.05, 255, cv2.THRESH_BINARY)[1]
+        
+        # calculate u and v only for these pixels.
+        window_shift=window_size//2
+        for i in range(corners.shape[0]):
+            for j in range(corners.shape[1]):
+                if corners[i, j] == 255:
+                    # calculate u and v only for these pixels.
+                    A = np.array([Ix[i - window_shift:i + window_shift + 1, j - window_shift:j + window_shift + 1].flatten(),
+                                Iy[i - window_shift:i + window_shift + 1, j - window_shift:j + window_shift + 1].flatten()]).T
+                    b = -It[i - window_shift:i + window_shift + 1, j - window_shift:j + window_shift + 1].flatten()
+                    # if np.linalg.matrix_rank(A) < 2:
+                    try:    
+                        x = np.linalg.lstsq(A, b, rcond=None)[0]
+                        u[i, j] = x[0]
+                        v[i, j] = x[1]
+                    except:
+                        u[i, j] ,v[i, j] = 0,0
+        return u,v
 
 def faster_lucas_kanade_optical_flow(
         I1: np.ndarray, I2: np.ndarray, window_size: int, max_iter: int,
@@ -496,6 +467,7 @@ def faster_lucas_kanade_optical_flow(
     """INSERT YOUR CODE HERE.
        Replace u and v with their true value."""
     
+    
     # Initialize Pyramids
     I2_warp=build_pyramid(I2,num_levels)
     # Initialize movements vectors
@@ -503,23 +475,24 @@ def faster_lucas_kanade_optical_flow(
     v = np.zeros((np.size(pyramid_I1[num_levels], 0), np.size(pyramid_I1[num_levels], 1)))
 
     # Calculate u,v using LucasKanadeStep func
-    for i in range(num_levels, 0, -1):
+    for i in range(num_levels, -1, -1):
         I2_warp[i] = warp_image(pyarmid_I2[i], u, v)
         # repeat L.K for refinement of movement vector
-        maxFlag = True
-        for step in range(max_iter):
+        for _ in range(max_iter):
             [du, dv] = faster_lucas_kanade_step(pyramid_I1[i], I2_warp[i], window_size)
             u = u + du
             v = v + dv
             I2_warp[i] = warp_image(pyarmid_I2[i], u, v)
-        # resize, as given in algorithm
-        u = 2 * cv2.pyrUp(u, dstsize=(np.size(pyramid_I1[i - 1], 1), np.size(pyramid_I1[i - 1], 0)), borderType=cv2.BORDER_DEFAULT )
-        v = 2 * cv2.pyrUp(v, dstsize=(np.size(pyramid_I1[i - 1], 1), np.size(pyramid_I1[i - 1], 0)), borderType=cv2.BORDER_DEFAULT)
+                    
+        if i > 0:
+            u=cv2.resize(u, ((np.size(pyramid_I1[i - 1], 1), np.size(pyramid_I1[i - 1], 0))))*2
+            v=cv2.resize(v, ((np.size(pyramid_I1[i - 1], 1), np.size(pyramid_I1[i - 1], 0))))*2
+    
     return u, v
 
 def lucas_kanade_faster_video_stabilization(
         input_video_path: str, output_video_path: str, window_size: int,
-        max_iter: int, num_levels: int) -> None:
+        max_iter: int, num_levels: int ) -> None:
     """Calculate LK Optical Flow to stabilize the video and save it to file.
 
     Args:
@@ -533,46 +506,49 @@ def lucas_kanade_faster_video_stabilization(
         None.
     """
     """INSERT YOUR CODE HERE."""
+   # Open a VideoCapture object of the input video and read its parameters.
     cap = cv2.VideoCapture(input_video_path)
-    # set the output
-    fourcc = cv2.VideoWriter_fourcc(*'XVID')
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) ) # float
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) ) # float
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    out_size = (width-30, height-30)
-    
-    new_Video = cv2.VideoWriter(output_video_path, fourcc, fps, out_size)
+    # Create an output video VideoCapture object with the same parameters as in (1) in the path given here as input.
+    videoParm=get_video_parameters(cap)
+    fourcc=cv2.VideoWriter_fourcc(*'XVID')
+    output = cv2.VideoWriter( output_video_path, fourcc, videoParm["fps"], (videoParm["width"], videoParm["height"]))
+    # Convert the first frame to grayscale and write it as-is to the output video.
+    ret, frame = cap.read()
+    I1 = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    output.write(I1)
+    # Create a u and a v which are og the size of the image.
+    U  = np.zeros(I1.shape)
+    V  = np.zeros(I1.shape)
+    # Loop over the frames in the input video    
+    for i in tqdm(range(int(videoParm['frame_count']) - 1)):
+                # Resize them to the shape in (4).
+        ret, frame = cap.read()
+        if ret==True:
+            I2 = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            # Feed them to the lucas_kanade_optical_flow with the previous frame.
+            (u, v) = faster_lucas_kanade_optical_flow(I1, I2, window_size, max_iter, num_levels)
+            # values over the region that the computation is valid 
+            window_shift=window_size//2
+            u_mean = np.mean(u[window_shift:-window_shift, window_shift:-window_shift])
+            v_mean = np.mean(v[window_shift:-window_shift, window_shift:-window_shift])
+            # Update u and v to their mean values inside the valid computation region.
+            
+            # u=np.zeros(u.shape)
+            # v=np.zeros(v.shape)
+            U += u_mean
+            V += v_mean
 
-    U = np.zeros((height, width))
-    V = np.zeros((height, width))
-
-    ret, I1 = cap.read()
-    new_Video.write(I1)
-    I1 = cv2.cvtColor(I1, cv2.COLOR_RGB2GRAY)
-    frame=2
-    while (cap.isOpened()):
-        
-        # For each fame neeeded to stabalize
-        ret, I2 = cap.read()
-        if ret == True:
-            # Change to grayscale and use  lucas_kanade_optical_flow
-            I2 = cv2.cvtColor(I2, cv2.COLOR_RGB2GRAY)
-            (du, dv) = faster_lucas_kanade_optical_flow(I1, I2, window_size, max_iter, num_levels)
-            # recalculate du,dv
-            U += np.mean(np.mean(du)) * np.ones((height, width))
-            V += np.mean(np.mean(dv)) * np.ones((height, width))
-            # use combined warp
+            # Finally, warp the current frame with the u and v you have at hand.
             I2_warp = warp_image(I2, U, V)
             I2_warp = cv2.cvtColor(I2_warp.astype(np.uint8), cv2.COLOR_GRAY2RGB)
             # write to new video
-            new_Video.write(I2_warp[0:height-30,0:width-30])
+            output.write(I2_warp)
+            # Save the updated u and v for the next frame (so you can perform step 6.5 for the next frame.
             I1 = I2.copy()
-        else:
-            break
-        frame+=1
-    # free videos
+        # free videos
+        
     cap.release()
-    new_Video.release()
+    output.release()
 
 
 
@@ -595,8 +571,48 @@ def lucas_kanade_faster_video_stabilization_fix_effects(
 
     Returns:
         None.
-    """
-    """INSERT YOUR CODE HERE."""
-    pass
+        """
+    cap = cv2.VideoCapture(input_video_path)
+    # Create an output video VideoCapture object with the same parameters as in (1) in the path given here as input.
+    videoParm=get_video_parameters(cap)
+    fourcc=cv2.VideoWriter_fourcc(*'XVID')
+    output = cv2.VideoWriter( output_video_path, fourcc, videoParm["fps"], (videoParm["width"], videoParm["height"]))
+    # Convert the first frame to grayscale and write it as-is to the output video.
+    ret, frame = cap.read()
+    I1 = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    output.write(I1)
+    # Create a u and a v which are og the size of the image.
+    U  = np.zeros(I1.shape)
+    V  = np.zeros(I1.shape)
+    # Loop over the frames in the input video    
+    for i in tqdm(range(int(videoParm['frame_count'] ) - 1)):
+                # Resize them to the shape in (4).
+        ret, frame = cap.read()
+        if ret==True:
+            I2 = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            # Feed them to the lucas_kanade_optical_flow with the previous frame.
+            (u, v) = faster_lucas_kanade_optical_flow(I1, I2, window_size, max_iter, num_levels)
+            # values over the region that the computation is valid 
+            window_shift=window_size//2
+            u_mean = np.mean(u[window_shift:-window_shift, window_shift:-window_shift])
+            v_mean = np.mean(v[window_shift:-window_shift, window_shift:-window_shift])
+            # Update u and v to their mean values inside the valid computation region.
+            
+            # u=np.zeros(u.shape)
+            # v=np.zeros(v.shape)
+            U += u_mean
+            V += v_mean
 
+            # Finally, warp the current frame with the u and v you have at hand.
+            I2_warp = warp_image(I2, U, V)
+            I2_warp_save=np.zeros(I2.shape)
+            I2_warp_save[start_rows:-end_rows,start_cols:-end_cols]=I2_warp[start_rows:-end_rows,start_cols:-end_cols]
+            I2_warp_save = cv2.cvtColor(I2_warp_save.astype(np.uint8), cv2.COLOR_GRAY2RGB)
+            # write to new video
+            output.write(I2_warp_save)
+            # Save the updated u and v for the next frame (so you can perform step 6.5 for the next frame.
+            I1 = I2.copy()
+        # free videos
+    cap.release()
+    output.release()
 
