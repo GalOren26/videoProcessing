@@ -1,2 +1,0 @@
-# videoProcessing
-TLV universy course
